@@ -1,7 +1,7 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { 
-  Cuenta, SaldoDiario, Movimiento, CuentaPendiente, 
+import {
+  Cuenta, SaldoDiario, Movimiento, CuentaPendiente,
   IngresoRecibir, Parametros, UIState, SuggestedDescription
 } from './types';
 import { id, ymd } from './utils';
@@ -18,7 +18,7 @@ interface GlobalStore {
   parametros: Parametros;
   ui: UIState;
   suggested: SuggestedDescription[];
-  
+
   setCuentas: (v: Cuenta[]) => void;
   setSaldos: (v: SaldoDiario[]) => void;
   setMovimientos: (v: Movimiento[]) => void;
@@ -28,7 +28,7 @@ interface GlobalStore {
   setParametros: (v: Parametros) => void;
   setUI: (v: Partial<UIState>) => void;
   saveSuggestion: (s: SuggestedDescription) => void;
-  
+
   loadDemoData: () => void;
   deleteSaldosByDate: (fecha: string) => void;
   clearMonthSaldos: (month: string) => void;
@@ -54,7 +54,7 @@ export const GlobalStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [ingresos, setIngresosState] = useState<IngresoRecibir[]>([]);
   const [parametros, setParametrosState] = useState<Parametros>({ lineaCreditoMonto: 18720000 });
   const [suggested, setSuggestedState] = useState<SuggestedDescription[]>([]);
-  
+
   const [ui, setUIState] = useState<UIState>({
     mesConsulta: dayjs().startOf('month').format('YYYY-MM-DD'),
     filtros: { texto: '', tipoMov: 'TODOS' },
@@ -105,45 +105,65 @@ export const GlobalStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
     fetchData();
   }, []);
 
+  /* 
+     CRITICAL: Added Error Handling for Persistence 
+     We verify the result of every upsert to ensure data reaches Supabase.
+  */
+
+  const handleSupabaseError = (operation: string, error: any) => {
+    console.error(`Error in ${operation}:`, error);
+    alert(`Error crítico guardando en base de datos (${operation}): ${error.message || JSON.stringify(error)}`);
+  };
+
   const setCuentas = async (v: Cuenta[]) => {
     setCuentasState(v);
-    await supabase.from('cuentas').upsert(v);
+    const { error } = await supabase.from('cuentas').upsert(v);
+    if (error) handleSupabaseError('setCuentas', error);
   };
 
   const setSaldos = async (v: SaldoDiario[]) => {
     setSaldosState(v);
-    await supabase.from('saldos').upsert(v);
+    const { error } = await supabase.from('saldos').upsert(v);
+    if (error) handleSupabaseError('setSaldos', error);
   };
 
   const setMovimientos = async (v: Movimiento[]) => {
     setMovimientosState(v);
-    await supabase.from('movimientos').upsert(v);
+    const { error } = await supabase.from('movimientos').upsert(v);
+    if (error) handleSupabaseError('setMovimientos', error);
   };
 
   const setCxP = async (v: CuentaPendiente[]) => {
     setCxPState(v);
-    await supabase.from('cxp').upsert(v);
+    // Optimization: If list is huge, we might want to upsert only changes. 
+    // But for now, ensuring persistence is paramount.
+    const { error } = await supabase.from('cxp').upsert(v);
+    if (error) handleSupabaseError('setCxP', error);
   };
 
   const setCxC = async (v: CuentaPendiente[]) => {
     setCxCState(v);
-    await supabase.from('cxc').upsert(v);
+    const { error } = await supabase.from('cxc').upsert(v);
+    if (error) handleSupabaseError('setCxC', error);
   };
 
   const setIngresos = async (v: IngresoRecibir[]) => {
     setIngresosState(v);
-    await supabase.from('ingresos').upsert(v);
+    const { error } = await supabase.from('ingresos').upsert(v);
+    if (error) handleSupabaseError('setIngresos', error);
   };
 
   const setParametros = async (v: Parametros) => {
     setParametrosState(v);
-    await supabase.from('parametros').upsert({ id: 'global', ...v });
+    const { error } = await supabase.from('parametros').upsert({ id: 'global', ...v });
+    if (error) handleSupabaseError('setParametros', error);
   };
 
   const saveSuggestion = async (s: SuggestedDescription) => {
     const newSuggest = [s, ...suggested.filter(p => p.descripcion !== s.descripcion)].slice(0, 50);
     setSuggestedState(newSuggest);
-    await supabase.from('suggested_descriptions').upsert(s);
+    const { error } = await supabase.from('suggested_descriptions').upsert(s);
+    if (error) handleSupabaseError('saveSuggestion', error);
   };
 
   const deleteSaldosByDate = async (fecha: string) => {
