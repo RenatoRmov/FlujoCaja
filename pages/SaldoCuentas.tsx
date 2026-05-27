@@ -58,7 +58,9 @@ const SaldoCuentas: React.FC = () => {
 
   const visibleDates = useMemo(() => {
     const start = dayjs(ui.mesConsulta).startOf('month').format('YYYY-MM-DD');
-    const end = dayjs(ui.mesConsulta).endOf('month').format('YYYY-MM-DD');
+    const endOfMonth = dayjs(ui.mesConsulta).endOf('month').format('YYYY-MM-DD');
+    const today = dayjs().format('YYYY-MM-DD');
+    const end = endOfMonth < today ? endOfMonth : today;
     const datesWithInfo = Array.from(new Set(
       saldos.filter(s => s.fecha >= start && s.fecha <= end).map(s => s.fecha)
     )) as string[];
@@ -121,11 +123,14 @@ const SaldoCuentas: React.FC = () => {
   };
 
   const kpis = useMemo(() => {
-    const lastDayOfMonthStr = dayjs(ui.mesConsulta).endOf('month').format('YYYY-MM-DD');
+    const endOfMonth = dayjs(ui.mesConsulta).endOf('month').format('YYYY-MM-DD');
+    const today = dayjs().format('YYYY-MM-DD');
+    // Cap at today for current/future months so future 0-value entries don't override real data
+    const cutoff = endOfMonth < today ? endOfMonth : today;
     const calculateSum = (type: AccountType) => activeCuentas
       .filter(c => c.tipo === type)
       .reduce((sum, c) => {
-        const matchingSaldos = saldos.filter(s => s.cuentaId === c.id && s.fecha <= lastDayOfMonthStr);
+        const matchingSaldos = saldos.filter(s => s.cuentaId === c.id && s.fecha <= cutoff);
         if (matchingSaldos.length === 0) return sum;
         return sum + matchingSaldos.sort((a, b) => b.fecha.localeCompare(a.fecha))[0].saldo;
       }, 0);

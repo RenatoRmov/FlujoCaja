@@ -210,14 +210,18 @@ export const GlobalStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const importSaldosFromExcel = async (items: SaldoDiario[], mode: 'replace' | 'merge') => {
     if (mode === 'replace') {
-      const dates = [...new Set(items.map(i => i.fecha))];
-      for (const fecha of dates) {
-        await supabase.from('saldos').delete().eq('fecha', fecha);
+      // Delete the entire month range for each month present in the import
+      // This cleans up stale future dates from previous imports
+      const months = [...new Set(items.map(i => i.fecha.substring(0, 7)))];
+      for (const month of months) {
+        const start = `${month}-01`;
+        const end = dayjs(start).endOf('month').format('YYYY-MM-DD');
+        await supabase.from('saldos').delete().gte('fecha', start).lte('fecha', end);
       }
-      const finalItems = [...saldos.filter(s => !dates.includes(s.fecha)), ...items];
-      const { error } = await supabase.from('saldos').upsert(items);
+      const freshState = saldos.filter(s => !months.includes(s.fecha.substring(0, 7)));
+      const { error } = await supabase.from('saldos').insert(items);
       if (error) { handleSupabaseError('importSaldosFromExcel', error); return; }
-      setSaldosState(finalItems);
+      setSaldosState([...freshState, ...items]);
     } else {
       const existingKeys = new Set(saldos.map(s => `${s.fecha}_${s.cuentaId}`));
       const newItems = items.filter(i => !existingKeys.has(`${i.fecha}_${i.cuentaId}`));

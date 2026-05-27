@@ -41,13 +41,22 @@ function cellNum(ws: XLSX.WorkSheet, r: number, c: number): number {
   return isNaN(n) ? 0 : n;
 }
 
+function utcDateStr(d: Date): string {
+  // SheetJS produces UTC-midnight Date objects; use UTC methods to avoid timezone shift
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function cellDate(ws: XLSX.WorkSheet, r: number, c: number): string | null {
   const cell = ws[XLSX.utils.encode_cell({ r, c })];
   if (!cell || !cell.v) return null;
-  if (cell.t === 'd' && cell.v instanceof Date) return dayjs(cell.v).format('YYYY-MM-DD');
+  if (cell.t === 'd' && cell.v instanceof Date) return utcDateStr(cell.v);
   if (typeof cell.v === 'number') {
-    const d = dayjs(new Date(Math.round((cell.v - 25569) * 86400 * 1000)));
-    return d.isValid() ? d.format('YYYY-MM-DD') : null;
+    const d = new Date(Math.round((cell.v - 25569) * 86400 * 1000));
+    const s = utcDateStr(d);
+    return s.startsWith('1') || s.startsWith('2') ? s : null;
   }
   const str = String(cell.v).trim();
   for (const f of ['DD-MM-YYYY', 'YYYY-MM-DD', 'D/M/YYYY', 'D-MMM-YY', 'D-MMM']) {
@@ -368,12 +377,22 @@ export default function ImportadorExcel() {
     const wsActual = workbook?.Sheets[workbook.SheetNames.find(n => n.toLowerCase().includes('actual')) || ''];
     if (!wsActual) return;
     setActualImporting(true);
+    setActualError('');
+    const today = dayjs().format('YYYY-MM-DD');
     const mappedCols = actualCols.filter(c => c.cuentaId !== '');
+    if (mappedCols.length === 0) {
+      setActualError('No hay cuentas mapeadas. Selecciona al menos una cuenta en la tabla de abajo.');
+      setActualImporting(false); return;
+    }
     const items: SaldoDiario[] = [];
-    for (const { rowIdx, fecha } of actualDateRows) {
+    for (const { rowIdx, fecha } of actualDateRows.filter(d => d.fecha <= today)) {
       for (const col of mappedCols) {
         items.push({ id: genId(), fecha, cuentaId: col.cuentaId, saldo: cellNum(wsActual, rowIdx, col.colIdx) });
       }
+    }
+    if (items.length === 0) {
+      setActualError('No se generaron registros. Verifica que el Excel tenga fechas anteriores o iguales a hoy.');
+      setActualImporting(false); return;
     }
     await importSaldosFromExcel(items, actualConflict);
     setActualImporting(false); setActualDone(true);
