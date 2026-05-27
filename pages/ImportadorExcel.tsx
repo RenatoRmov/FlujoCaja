@@ -128,7 +128,7 @@ function detectMonthGroups(ws: XLSX.WorkSheet): MonthGroup[] {
         // Scan left-to-right and stop at FIRST match for each header.
         // Without this, adjacent month sections (e.g. "Abril" to the right of "Mayo")
         // would overwrite the correct column indices with the wrong month's columns.
-        for (let dc = -2; dc <= 14; dc++) {
+        for (let dc = 0; dc <= 14; dc++) {
           // cellStr already normalizes newlines/spaces, plus strip dots
           const sub = cellStr(ws, subRow, c + dc).toLowerCase().replace(/\./g, '').trim();
           if (sub === 'deuda' && colDeuda < 0) colDeuda = c + dc;
