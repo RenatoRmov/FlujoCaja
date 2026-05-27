@@ -114,11 +114,16 @@ function detectMonthGroups(ws: XLSX.WorkSheet): MonthGroup[] {
       for (let dr = 1; dr <= 4; dr++) {
         const subRow = r + dr;
         let colDeuda = -1, colVcmto = -1, colPorPagar = -1;
-        for (let dc = -2; dc <= 12; dc++) {
+        // Scan left-to-right and stop at FIRST match for each header.
+        // Without this, adjacent month sections (e.g. "Abril" to the right of "Mayo")
+        // would overwrite the correct column indices with the wrong month's columns.
+        for (let dc = -2; dc <= 8; dc++) {
           const sub = cellStr(ws, subRow, c + dc).toLowerCase().replace(/\./g, '').trim();
-          if (sub === 'deuda') colDeuda = c + dc;
-          else if (sub.startsWith('vcmto') || sub.startsWith('vencim')) colVcmto = c + dc;
-          else if (sub === 'por pagar' || sub === 'x pagar') colPorPagar = c + dc;
+          if (sub === 'deuda' && colDeuda < 0) colDeuda = c + dc;
+          else if ((sub.startsWith('vcmto') || sub.startsWith('vencim')) && colVcmto < 0) colVcmto = c + dc;
+          else if ((sub === 'por pagar' || sub === 'x pagar') && colPorPagar < 0) colPorPagar = c + dc;
+          // Stop scanning once all three are found
+          if (colDeuda >= 0 && colVcmto >= 0 && colPorPagar >= 0) break;
         }
         if (colDeuda >= 0 && colVcmto >= 0 && colPorPagar >= 0) {
           groups.push({ monthStr: monthDate, label: val, colDeuda, colVcmto, colPorPagar, headerRow: subRow });
