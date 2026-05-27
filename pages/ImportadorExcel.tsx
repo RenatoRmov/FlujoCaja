@@ -31,7 +31,18 @@ function parseMonthHeader(text: string): string | null {
 function cellStr(ws: XLSX.WorkSheet, r: number, c: number): string {
   const cell = ws[XLSX.utils.encode_cell({ r, c })];
   if (!cell || cell.v == null) return '';
-  return String(cell.v).trim();
+  return String(cell.v).replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function colLetter(idx: number): string {
+  let s = '';
+  let n = idx + 1;
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
 }
 
 function cellNum(ws: XLSX.WorkSheet, r: number, c: number): number {
@@ -117,15 +128,17 @@ function detectMonthGroups(ws: XLSX.WorkSheet): MonthGroup[] {
         // Scan left-to-right and stop at FIRST match for each header.
         // Without this, adjacent month sections (e.g. "Abril" to the right of "Mayo")
         // would overwrite the correct column indices with the wrong month's columns.
-        for (let dc = -2; dc <= 8; dc++) {
+        for (let dc = -2; dc <= 14; dc++) {
+          // cellStr already normalizes newlines/spaces, plus strip dots
           const sub = cellStr(ws, subRow, c + dc).toLowerCase().replace(/\./g, '').trim();
           if (sub === 'deuda' && colDeuda < 0) colDeuda = c + dc;
           else if ((sub.startsWith('vcmto') || sub.startsWith('vencim')) && colVcmto < 0) colVcmto = c + dc;
           else if ((sub === 'por pagar' || sub === 'x pagar') && colPorPagar < 0) colPorPagar = c + dc;
-          // Stop scanning once all three are found
           if (colDeuda >= 0 && colVcmto >= 0 && colPorPagar >= 0) break;
         }
-        if (colDeuda >= 0 && colVcmto >= 0 && colPorPagar >= 0) {
+        if (colDeuda >= 0 && colVcmto >= 0) {
+          // If "Por pagar" header wasn't found, assume it sits right after Vcmto
+          if (colPorPagar < 0) colPorPagar = colVcmto + 1;
           groups.push({ monthStr: monthDate, label: val, colDeuda, colVcmto, colPorPagar, headerRow: subRow });
           seen.add(monthDate);
           break;
@@ -523,6 +536,12 @@ export default function ImportadorExcel() {
                   </button>
                 ))}
               </div>
+            </div>
+          )}
+
+          {selectedGroup && (
+            <div className="text-[10px] text-slate-400 bg-slate-50 rounded-lg px-3 py-1.5 font-mono">
+              Cols detectadas: Deuda={colLetter(selectedGroup.colDeuda)} · Vcmto={colLetter(selectedGroup.colVcmto)} · Por pagar={colLetter(selectedGroup.colPorPagar)} · Fila subheader={selectedGroup.headerRow + 1}
             </div>
           )}
 
