@@ -35,6 +35,8 @@ interface GlobalStore {
   importMovimientos: (rows: Movimiento[]) => void;
   clearMonthMovimientos: (month: string) => void;
 
+  importCxPFromExcel: (month: string, items: CuentaPendiente[], mode: 'replace' | 'merge') => Promise<void>;
+
   // Funciones de eliminación física
   deleteCxP: (idOrIds: string | string[]) => Promise<void>;
   deleteCxC: (idOrIds: string | string[]) => Promise<void>;
@@ -205,6 +207,23 @@ export const GlobalStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   };
 
+  const importCxPFromExcel = async (month: string, items: CuentaPendiente[], mode: 'replace' | 'merge') => {
+    let finalItems: CuentaPendiente[];
+    if (mode === 'replace') {
+      const { error: delError } = await supabase.from('cxp').delete().eq('mes', month);
+      if (delError) { handleSupabaseError('importCxPFromExcel:delete', delError); return; }
+      finalItems = [...cxp.filter(i => i.mes !== month), ...items];
+    } else {
+      const existingDescs = new Set(cxp.filter(i => i.mes === month).map(i => i.descripcion));
+      const newItems = items.filter(i => !existingDescs.has(i.descripcion));
+      if (newItems.length === 0) return;
+      finalItems = [...cxp, ...newItems];
+    }
+    const { error } = await supabase.from('cxp').upsert(finalItems);
+    if (error) { handleSupabaseError('importCxPFromExcel:upsert', error); return; }
+    setCxPState(finalItems);
+  };
+
   const deleteCxP = async (idOrIds: string | string[]) => {
     const ids = Array.isArray(idOrIds) ? idOrIds : [idOrIds];
     const { error } = await supabase.from('cxp').delete().in('id', ids);
@@ -295,6 +314,7 @@ export const GlobalStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
       cuentas, saldos, movimientos, cxp, cxc, ingresos, parametros, ui, suggested,
       setCuentas, setSaldos, setMovimientos, setCxP, setCxC, setIngresos, setParametros, setUI, saveSuggestion,
       loadDemoData, deleteSaldosByDate, clearMonthSaldos, importMovimientos, clearMonthMovimientos,
+      importCxPFromExcel,
       deleteCxP, deleteCxC, deleteIngreso, deleteMovimiento, deleteCuenta
     }}>
       {children}

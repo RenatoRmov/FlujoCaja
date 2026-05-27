@@ -1,12 +1,13 @@
 
 import React from 'react';
-import { 
-  Wallet, 
-  ArrowLeftRight, 
-  CreditCard, 
-  HandCoins, 
-  TrendingUp, 
-  LayoutDashboard 
+import {
+  Wallet,
+  ArrowLeftRight,
+  CreditCard,
+  HandCoins,
+  TrendingUp,
+  LayoutDashboard,
+  FileUp
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -22,6 +23,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPath, onNavigate }) => {
     { id: 'cxc', label: 'Cuentas por Cobrar', icon: HandCoins },
     { id: 'ingresos', label: 'Ingresos por Recibir', icon: TrendingUp },
     { id: 'flujo', label: 'Flujo de Caja', icon: LayoutDashboard },
+    { id: 'importar', label: 'Importar desde Excel', icon: FileUp },
   ];
 
   return (

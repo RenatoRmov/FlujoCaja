@@ -8,6 +8,7 @@ import CuentasPagar from './pages/CuentasPagar';
 import CuentasCobrar from './pages/CuentasCobrar';
 import Ingresos from './pages/Ingresos';
 import FlujoCaja from './pages/FlujoCaja';
+import ImportadorExcel from './pages/ImportadorExcel';
 import { Database } from 'lucide-react';
 
 const AppContent: React.FC = () => {
@@ -22,6 +23,7 @@ const AppContent: React.FC = () => {
       case 'cxc': return 'Cuentas por Cobrar';
       case 'ingresos': return 'Ingresos por Recibir';
       case 'flujo': return 'Flujo de Caja Proyectado';
+      case 'importar': return 'Importar desde Excel';
       default: return 'Sistema Financiero';
     }
   };
@@ -34,6 +36,7 @@ const AppContent: React.FC = () => {
       case 'cxc': return <CuentasCobrar />;
       case 'ingresos': return <Ingresos />;
       case 'flujo': return <FlujoCaja />;
+      case 'importar': return <ImportadorExcel />;
       default: return <SaldoCuentas />;
     }
   };
