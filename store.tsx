@@ -36,6 +36,7 @@ interface GlobalStore {
   clearMonthMovimientos: (month: string) => void;
 
   importCxPFromExcel: (month: string, items: CuentaPendiente[], mode: 'replace' | 'merge') => Promise<void>;
+  importSaldosFromExcel: (items: SaldoDiario[], mode: 'replace' | 'merge') => Promise<void>;
 
   // Funciones de eliminación física
   deleteCxP: (idOrIds: string | string[]) => Promise<void>;
@@ -207,6 +208,26 @@ export const GlobalStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   };
 
+  const importSaldosFromExcel = async (items: SaldoDiario[], mode: 'replace' | 'merge') => {
+    if (mode === 'replace') {
+      const dates = [...new Set(items.map(i => i.fecha))];
+      for (const fecha of dates) {
+        await supabase.from('saldos').delete().eq('fecha', fecha);
+      }
+      const finalItems = [...saldos.filter(s => !dates.includes(s.fecha)), ...items];
+      const { error } = await supabase.from('saldos').upsert(items);
+      if (error) { handleSupabaseError('importSaldosFromExcel', error); return; }
+      setSaldosState(finalItems);
+    } else {
+      const existingKeys = new Set(saldos.map(s => `${s.fecha}_${s.cuentaId}`));
+      const newItems = items.filter(i => !existingKeys.has(`${i.fecha}_${i.cuentaId}`));
+      if (newItems.length === 0) return;
+      const { error } = await supabase.from('saldos').insert(newItems);
+      if (error) { handleSupabaseError('importSaldosFromExcel:merge', error); return; }
+      setSaldosState(prev => [...prev, ...newItems]);
+    }
+  };
+
   const importCxPFromExcel = async (month: string, items: CuentaPendiente[], mode: 'replace' | 'merge') => {
     let finalItems: CuentaPendiente[];
     if (mode === 'replace') {
@@ -314,7 +335,7 @@ export const GlobalStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
       cuentas, saldos, movimientos, cxp, cxc, ingresos, parametros, ui, suggested,
       setCuentas, setSaldos, setMovimientos, setCxP, setCxC, setIngresos, setParametros, setUI, saveSuggestion,
       loadDemoData, deleteSaldosByDate, clearMonthSaldos, importMovimientos, clearMonthMovimientos,
-      importCxPFromExcel,
+      importCxPFromExcel, importSaldosFromExcel,
       deleteCxP, deleteCxC, deleteIngreso, deleteMovimiento, deleteCuenta
     }}>
       {children}
