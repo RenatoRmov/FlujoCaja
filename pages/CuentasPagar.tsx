@@ -187,10 +187,15 @@ const CuentasPagar: React.FC = () => {
   };
 
   const filteredCxP = useMemo(() => {
+    const start = ui.mesConsulta;
+    const end = dayjs(ui.mesConsulta).endOf('month').format('YYYY-MM-DD');
     return cxp.filter(item => {
-      const isMonth = item.mes === ui.mesConsulta;
+      // Filter by vencimiento range when available; fall back to mes for items without vencimiento
+      const inMonth = item.vencimiento
+        ? item.vencimiento >= start && item.vencimiento <= end
+        : item.mes === ui.mesConsulta;
       const matchesTab = activeTab === 'Todas' || item.categoria === activeTab;
-      return isMonth && matchesTab;
+      return inMonth && matchesTab;
     }).sort((a, b) => (a.vencimiento || '').localeCompare(b.vencimiento || ''));
   }, [cxp, ui.mesConsulta, activeTab]);
 

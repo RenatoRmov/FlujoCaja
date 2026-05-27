@@ -359,7 +359,11 @@ export default function ImportadorExcel() {
     if (!selectedGroup || parsedRows.length === 0) return;
     setCxpImporting(true);
     const items: CuentaPendiente[] = parsedRows.map(row => ({
-      id: genId(), mes: selectedGroup.monthStr,
+      id: genId(),
+      // Use vencimiento month as mes (consistent with manual entries), fall back to sheet month
+      mes: row.vencimiento
+        ? dayjs(row.vencimiento).startOf('month').format('YYYY-MM-DD')
+        : selectedGroup.monthStr,
       descripcion: row.descripcion, tipoPago: row.tipoPago,
       categoria: row.categoria, monto: row.monto, saldo: row.saldo,
       vencimiento: row.vencimiento, estado: row.estado, observaciones: '',
