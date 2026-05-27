@@ -70,8 +70,8 @@ const FlujoCaja: React.FC = () => {
         p.tipoPago === 'EFECTIVO'
       );
       
-      const totalCargos = dayMovCargos.reduce((sum, m) => sum + m.monto, 0) + 
-                          dayCxP.reduce((sum, p) => sum + p.monto, 0);
+      const totalCargos = dayMovCargos.reduce((sum, m) => sum + m.monto, 0) +
+                          dayCxP.reduce((sum, p) => sum + (p.saldo || p.monto), 0);
 
       // Calculamos el saldo CC acumulado
       runningBalance = runningBalance + totalAbonos - totalCargos;

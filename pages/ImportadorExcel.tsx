@@ -59,9 +59,9 @@ function cellDate(ws: XLSX.WorkSheet, r: number, c: number): string | null {
     return s.startsWith('1') || s.startsWith('2') ? s : null;
   }
   const str = String(cell.v).trim();
-  for (const f of ['DD-MM-YYYY', 'YYYY-MM-DD', 'D/M/YYYY', 'D-MMM-YY', 'D-MMM']) {
+  for (const f of ['DD-MM-YYYY', 'DD/MM/YYYY', 'YYYY-MM-DD', 'D/M/YYYY', 'D/M/YY', 'D-MMM-YY', 'D-MMM-YYYY', 'D-MMM']) {
     const d = dayjs(str, f);
-    if (d.isValid()) return d.format('YYYY-MM-DD');
+    if (d.isValid() && d.year() > 1970) return d.format('YYYY-MM-DD');
   }
   return null;
 }
@@ -71,6 +71,14 @@ function isHiddenRow(ws: XLSX.WorkSheet, r: number): boolean {
 }
 
 // ── CxP helpers ───────────────────────────────────────────────────────────────
+
+function normalizeDesc(desc: string): string {
+  return desc
+    .toLowerCase()
+    .replace(/\s*\([^)]+\)/g, '')  // strip "(0227...6125)", "(3/33)", etc.
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 function detectCategoria(desc: string): CategoryType {
   const d = desc.toLowerCase();
@@ -151,11 +159,12 @@ function parseCuentasSheet(ws: XLSX.WorkSheet, group: MonthGroup): ParsedCxPRow[
     let vencimiento = cellDate(ws, r, group.colVcmto);
     if (vencimiento) {
       const d = dayjs(vencimiento);
-      if (d.isValid() && d.year() !== groupYear && Math.abs(d.year() - groupYear) <= 1)
+      // Always force the group year — Excel templates often carry stale years
+      if (d.isValid() && d.year() !== groupYear)
         vencimiento = d.year(groupYear).format('YYYY-MM-DD');
     }
 
-    const porPagar = cellNum(ws, r, group.colPorPagar);
+    const porPagar = Math.max(0, cellNum(ws, r, group.colPorPagar)); // ignore negatives
     const estado: 'PENDIENTE' | 'PAGADA' | 'PARCIAL' =
       porPagar <= 0 ? 'PAGADA' : porPagar < monto ? 'PARCIAL' : 'PENDIENTE';
 
@@ -358,16 +367,41 @@ export default function ImportadorExcel() {
   const handleCxpImport = async () => {
     if (!selectedGroup || parsedRows.length === 0) return;
     setCxpImporting(true);
-    const items: CuentaPendiente[] = parsedRows.map(row => ({
-      id: genId(),
-      // Use vencimiento month as mes (consistent with manual entries), fall back to sheet month
-      mes: row.vencimiento
-        ? dayjs(row.vencimiento).startOf('month').format('YYYY-MM-DD')
-        : selectedGroup.monthStr,
-      descripcion: row.descripcion, tipoPago: row.tipoPago,
-      categoria: row.categoria, monto: row.monto, saldo: row.saldo,
-      vencimiento: row.vencimiento, estado: row.estado, observaciones: '',
-    }));
+    // Build a match map: normalizedDesc → existing cxp item (any month)
+    const existingByNorm = new Map<string, CuentaPendiente>();
+    for (const item of cxp) {
+      const key = normalizeDesc(item.descripcion);
+      if (!existingByNorm.has(key)) existingByNorm.set(key, item);
+    }
+    const findMatch = (desc: string, venc: string | null) => {
+      const n = normalizeDesc(desc);
+      // Exact normalized match
+      if (existingByNorm.has(n)) return existingByNorm.get(n)!;
+      // Prefix match (Excel has "Falabella Michelle (0227)" → webapp has "Falabella Michelle")
+      for (const [k, v] of existingByNorm) {
+        if (n.startsWith(k) || k.startsWith(n)) return v;
+      }
+      return null;
+    };
+
+    const items: CuentaPendiente[] = parsedRows.map(row => {
+      const match = findMatch(row.descripcion, row.vencimiento);
+      return {
+        // Reuse existing id+groupId when match found, so webapp history is preserved
+        id: match?.id ?? genId(),
+        mes: selectedGroup.monthStr,
+        descripcion: match?.descripcion ?? row.descripcion,
+        tipoPago: row.tipoPago,
+        categoria: row.categoria,
+        monto: row.monto,
+        saldo: row.saldo,
+        vencimiento: row.vencimiento,
+        estado: row.estado,
+        observaciones: match?.observaciones ?? '',
+        ...(match?.groupId ? { groupId: match.groupId } : {}),
+        ...(match?.cuotaActual ? { cuotaActual: match.cuotaActual, cuotasTotales: match.cuotasTotales } : {}),
+      };
+    });
     await importCxPFromExcel(selectedGroup.monthStr, items, cxpConflict);
     setCxpImporting(false); setCxpDone(true);
   };
@@ -489,38 +523,75 @@ export default function ImportadorExcel() {
 
           {parsedRows.length > 0 && selectedGroup && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Vista previa — {parsedRows.length} registros en {selectedGroup.label}</p>
-                <span className="text-xs text-slate-400 flex items-center gap-1"><Info className="w-3 h-3" />Categorías inferidas, editables después</span>
-              </div>
-              <div className="overflow-auto max-h-72 rounded-xl border border-slate-200">
-                <table className="w-full text-xs">
-                  <thead className="bg-slate-50 sticky top-0">
-                    <tr>{['Descripción', 'Tipo', 'Categoría', 'Deuda', 'Vencimiento', 'Por Pagar', 'Estado'].map(h => (
-                      <th key={h} className="text-left px-3 py-2 font-bold text-slate-500 border-b border-slate-200 whitespace-nowrap">{h}</th>
-                    ))}</tr>
-                  </thead>
-                  <tbody>
-                    {parsedRows.map((row, i) => (
-                      <tr key={i} className="border-b border-slate-100 hover:bg-slate-50">
-                        <td className="px-3 py-2 font-medium text-slate-700 max-w-[200px] truncate">{row.descripcion}</td>
-                        <td className="px-3 py-2">
-                          <span className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${row.tipoPago === 'TARJETA_CREDITO' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600'}`}>
-                            {row.tipoPago === 'TARJETA_CREDITO' ? 'TC' : 'EF'}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 text-slate-500">{row.categoria}</td>
-                        <td className="px-3 py-2 text-right font-mono text-slate-700">{fmt(row.monto)}</td>
-                        <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{row.vencimiento ?? '—'}</td>
-                        <td className="px-3 py-2 text-right font-mono text-slate-700">{fmt(row.saldo)}</td>
-                        <td className="px-3 py-2">
-                          <span className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${row.estado === 'PAGADA' ? 'bg-emerald-100 text-emerald-700' : row.estado === 'PARCIAL' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>{row.estado}</span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              {(() => {
+                // Build match map for preview
+                const previewMatchMap = new Map<string, CuentaPendiente>();
+                for (const item of cxp) {
+                  const k = normalizeDesc(item.descripcion);
+                  if (!previewMatchMap.has(k)) previewMatchMap.set(k, item);
+                }
+                const getPreviewMatch = (desc: string) => {
+                  const n = normalizeDesc(desc);
+                  if (previewMatchMap.has(n)) return previewMatchMap.get(n)!;
+                  for (const [k, v] of previewMatchMap) {
+                    if (n.startsWith(k) || k.startsWith(n)) return v;
+                  }
+                  return null;
+                };
+                const matchCount = parsedRows.filter(r => getPreviewMatch(r.descripcion)).length;
+                return (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Vista previa — {parsedRows.length} registros en {selectedGroup.label}</p>
+                      <span className="text-xs text-slate-400 flex items-center gap-2">
+                        <span className="text-blue-600 font-bold">{matchCount} enlazadas</span>
+                        <span className="text-emerald-600 font-bold">{parsedRows.length - matchCount} nuevas</span>
+                      </span>
+                    </div>
+                    <div className="overflow-auto max-h-72 rounded-xl border border-slate-200">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50 sticky top-0">
+                          <tr>{['', 'Descripción', 'Tipo', 'Cat.', 'Deuda', 'Vcmto.', 'Por Pagar', 'Estado'].map(h => (
+                            <th key={h} className="text-left px-3 py-2 font-bold text-slate-500 border-b border-slate-200 whitespace-nowrap">{h}</th>
+                          ))}</tr>
+                        </thead>
+                        <tbody>
+                          {parsedRows.map((row, i) => {
+                            const match = getPreviewMatch(row.descripcion);
+                            return (
+                              <tr key={i} className={`border-b border-slate-100 hover:bg-slate-50 ${match ? 'bg-blue-50/40' : ''}`}>
+                                <td className="px-3 py-2">
+                                  {match
+                                    ? <span className="px-1.5 py-0.5 rounded font-bold text-[9px] bg-blue-100 text-blue-700 whitespace-nowrap">↔ ENLAZA</span>
+                                    : <span className="px-1.5 py-0.5 rounded font-bold text-[9px] bg-emerald-100 text-emerald-700">+ NUEVO</span>}
+                                </td>
+                                <td className="px-3 py-2 font-medium text-slate-700 max-w-[180px]">
+                                  <div className="truncate">{row.descripcion}</div>
+                                  {match && match.descripcion !== row.descripcion && (
+                                    <div className="text-blue-500 text-[9px] truncate">→ {match.descripcion}</div>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <span className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${row.tipoPago === 'TARJETA_CREDITO' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600'}`}>
+                                    {row.tipoPago === 'TARJETA_CREDITO' ? 'TC' : 'EF'}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2 text-slate-500 text-[10px]">{row.categoria}</td>
+                                <td className="px-3 py-2 text-right font-mono text-slate-700">{fmt(row.monto)}</td>
+                                <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{row.vencimiento ?? '—'}</td>
+                                <td className="px-3 py-2 text-right font-mono font-bold text-slate-800">{fmt(row.saldo)}</td>
+                                <td className="px-3 py-2">
+                                  <span className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${row.estado === 'PAGADA' ? 'bg-emerald-100 text-emerald-700' : row.estado === 'PARCIAL' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>{row.estado}</span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                );
+              })()}
 
               {existingForMonth.length > 0 && (
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
