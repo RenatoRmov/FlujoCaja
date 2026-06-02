@@ -242,8 +242,21 @@ export const GlobalStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (error) { handleSupabaseError('importCxPFromExcel:insert', error); return; }
       setCxPState([...cxp.filter(i => i.mes !== month), ...items]);
     } else {
-      const existingDescs = new Set(cxp.filter(i => i.mes === month).map(i => i.descripcion));
-      const newItems = items.filter(i => !existingDescs.has(i.descripcion));
+      const existingInMonth = cxp.filter(i => i.mes === month);
+      const existingDescs = new Set(existingInMonth.map(i => i.descripcion));
+      // If a groupId already has a member in this month, don't add another one
+      const existingGroupIds = new Set(existingInMonth.filter(i => i.groupId).map(i => i.groupId!));
+
+      // Deduplicate within incoming batch too (same groupId or same description = same credit)
+      const seenKeys = new Set<string>();
+      const newItems = items.filter(i => {
+        const key = i.groupId ?? i.descripcion;
+        if (seenKeys.has(key)) return false;
+        seenKeys.add(key);
+        if (existingDescs.has(i.descripcion)) return false;
+        if (i.groupId && existingGroupIds.has(i.groupId)) return false;
+        return true;
+      });
       if (newItems.length === 0) return;
       const { error } = await supabase.from('cxp').insert(newItems);
       if (error) { handleSupabaseError('importCxPFromExcel:merge', error); return; }

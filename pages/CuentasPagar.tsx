@@ -47,6 +47,8 @@ const CuentasPagar: React.FC = () => {
     mode: 'EQUAL' as 'EQUAL' | 'PROPORTIONAL'
   });
   const [previewInstallments, setPreviewInstallments] = useState<CuentaPendiente[]>([]);
+  // IDs of orphan items (imported without cuotaActual, duplicates of properly-numbered installments)
+  const [orphanIds, setOrphanIds] = useState<string[]>([]);
 
   const categories: CategoryType[] = ['Gastos Casa', 'Tarjeta de credito', 'Seguros', 'Tag', 'Prestamos', 'Gastos Operacionales', 'Otros'];
 
@@ -279,37 +281,21 @@ const CuentasPagar: React.FC = () => {
   const handleSaveRestructure = async () => {
     if (!editingItem || !editingItem.groupId) return;
 
-    // 1. Delete old installments that are NOT in the new set (if count decreased)
-    // Actually, distinct IDs are better for safety.
-    // If we reduced count, some IDs from editingInstallments are not in previewInstallments (if we reused IDs)
-    // or we generated new IDs. 
-    // Our logic reused IDs for first N.
-
     const oldIds = editingInstallments.map(i => i.id);
     const newIds = previewInstallments.map(i => i.id);
-    const idsToDelete = oldIds.filter(oid => !newIds.includes(oid));
+    // Also delete any orphan items (import duplicates) detected when opening the modal
+    const idsToDelete = [
+      ...oldIds.filter(oid => !newIds.includes(oid)),
+      ...orphanIds,
+    ];
 
     if (idsToDelete.length > 0) {
       await deleteCxP(idsToDelete);
     }
+    setOrphanIds([]);
 
-    // 2. Upsert new installments.
-    // Note: upsert in `setCxP` handles updates for existing IDs and inserts for new IDs.
-    // However, we need to update the GLOBAL list state locally first to reflect changes immediately without reload 
-    // (though setCxP does `setCxPState`).
+    let newFullList = cxp.filter(item => !idsToDelete.includes(item.id));
 
-    // We need to merge `previewInstallments` into `cxp`, removing the ones we deleted?
-    // Actually `setCxP` takes the *new entire list* usually?
-    // Checking store: `setCxP` -> `setCxPState(v); await supabase.from('cxp').upsert(v);`
-    // Wait, `setCxP` expects a list. If I pass ONLY the new ones, it upserts them. 
-    // It does NOT delete others from the DB. Use `deleteCxP` for that (done above).
-    // BUT we need to update the local `cxp` state to remove the old ones that were deleted and update the modified ones.
-
-    // Let's modify the local list:
-    let newFullList = cxp.filter(item => !idsToDelete.includes(item.id)); // Remove deleted
-
-    // Now replace/add the preview ones
-    // We iterate over previewInstallments. If ID exists in list, replace. If not, add.
     for (const p of previewInstallments) {
       const idx = newFullList.findIndex(x => x.id === p.id);
       if (idx >= 0) {
@@ -455,13 +441,26 @@ const CuentasPagar: React.FC = () => {
     setEditingItem({ ...item });
 
     if (isGroup && group.length > 0) {
-      // Sort by current installment number or date
-      group.sort((a, b) => {
-        const cuotaA = a.cuotaActual || 0;
-        const cuotaB = b.cuotaActual || 0;
-        if (cuotaA !== cuotaB) return cuotaA - cuotaB;
-        return (a.vencimiento || '').localeCompare(b.vencimiento || '');
+      // Sort chronologically by vencimiento date; cuotaActual as tiebreaker
+      group.sort((a, b) =>
+        (a.vencimiento || '').localeCompare(b.vencimiento || '') ||
+        (a.cuotaActual || 0) - (b.cuotaActual || 0)
+      );
+
+      // Detect orphan items: have groupId but no cuotaActual, and their month already
+      // has a properly-numbered installment. These are duplicates from bad Excel imports.
+      const monthsWithProperCuota = new Set(
+        group.filter(i => (i.cuotaActual ?? 0) > 0).map(i => i.mes)
+      );
+      const orphans: string[] = [];
+      group = group.filter(i => {
+        if ((i.cuotaActual ?? 0) === 0 && monthsWithProperCuota.has(i.mes)) {
+          orphans.push(i.id);
+          return false;
+        }
+        return true;
       });
+      setOrphanIds(orphans);
 
       setEditingInstallments(group);
 

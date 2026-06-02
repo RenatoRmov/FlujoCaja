@@ -420,7 +420,16 @@ export default function ImportadorExcel() {
         ...(anyMatch?.groupId ? { groupId: anyMatch.groupId } : {}),
       };
     });
-    await importCxPFromExcel(selectedGroup.monthStr, items, cxpConflict);
+    // Deduplicate by groupId (or description) — the Excel can have the same credit
+    // on multiple rows; keep only the first occurrence to prevent batch duplicates
+    const seenKeys = new Set<string>();
+    const uniqueItems = items.filter(i => {
+      const key = i.groupId ?? i.descripcion;
+      if (seenKeys.has(key)) return false;
+      seenKeys.add(key);
+      return true;
+    });
+    await importCxPFromExcel(selectedGroup.monthStr, uniqueItems, cxpConflict);
     setCxpImporting(false); setCxpDone(true);
   };
 
