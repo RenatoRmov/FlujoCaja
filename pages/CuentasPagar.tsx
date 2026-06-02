@@ -490,23 +490,33 @@ const CuentasPagar: React.FC = () => {
   };
 
   const handleDelete = useCallback(async (item: CuentaPendiente) => {
-    if (item.groupId && (item.cuotasTotales || 0) > 1) {
-      const choice = confirm(`Esta cuenta tiene ${item.cuotasTotales} cuotas vinculadas.\n\n¿Deseas eliminar TODA la serie de cuotas?`);
-      if (choice) {
-        const idsToRemove = cxp.filter(i => i.groupId === item.groupId).map(i => i.id);
-        await deleteCxP(idsToRemove);
-      } else {
-        const individual = confirm('¿Deseas eliminar únicamente esta cuota específica?');
-        if (individual) {
-          await deleteCxP(item.id);
+    if (item.groupId) {
+      const seriesItems = cxp.filter(i => i.groupId === item.groupId);
+      if (seriesItems.length > 1) {
+        const choice = confirm(`Esta cuenta tiene ${seriesItems.length} cuotas vinculadas en toda la serie.\n\n¿Deseas eliminar TODA la serie de cuotas?`);
+        if (choice) {
+          await deleteCxP(seriesItems.map(i => i.id));
+        } else {
+          if (confirm('¿Eliminar únicamente esta cuota específica?')) {
+            await deleteCxP(item.id);
+          }
         }
-      }
-    } else {
-      if (confirm('¿Eliminar este registro permanentemente?')) {
-        await deleteCxP(item.id);
+        return;
       }
     }
+    if (confirm('¿Eliminar este registro permanentemente?')) {
+      await deleteCxP(item.id);
+    }
   }, [cxp, deleteCxP]);
+
+  const handleDeleteSeries = useCallback(async () => {
+    if (!editingItem?.groupId) return;
+    const seriesItems = cxp.filter(i => i.groupId === editingItem.groupId);
+    const count = seriesItems.length;
+    if (!confirm(`¿Eliminar TODA la serie "${editingItem.descripcion.replace(/\s\(\d+\/\d+\)$/, '')}" (${count} cuotas) permanentemente? Esta acción no se puede deshacer.`)) return;
+    await deleteCxP(seriesItems.map(i => i.id));
+    setIsEditModalOpen(false);
+  }, [cxp, editingItem, deleteCxP]);
 
   return (
     <div className="space-y-6">
@@ -696,6 +706,11 @@ const CuentasPagar: React.FC = () => {
               </span>
             </div>
             <div className="flex gap-2">
+              {editingItem?.groupId && (
+                <button type="button" onClick={handleDeleteSeries} className="px-4 py-2 text-red-600 font-bold hover:bg-red-50 rounded-lg border border-red-200 flex items-center gap-1.5">
+                  <Trash2 className="w-4 h-4" />Eliminar Serie
+                </button>
+              )}
               <button type="button" onClick={() => setIsEditModalOpen(false)} className="px-4 py-2 text-slate-500 font-bold hover:bg-slate-100 rounded-lg">Cancelar</button>
               {applyToAll && editingItem?.groupId ? (
                 <button type="button" onClick={handleSaveRestructure} className="bg-blue-600 text-white px-8 py-2 rounded-lg font-bold hover:bg-blue-700 shadow-lg">Guardar Serie</button>
