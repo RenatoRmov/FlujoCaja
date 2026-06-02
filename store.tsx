@@ -239,7 +239,7 @@ export const GlobalStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (delError) { handleSupabaseError('importCxPFromExcel:delete', delError); return; }
       // Insert only the incoming items; other months are already correct in the DB
       const { error } = await supabase.from('cxp').insert(items);
-      if (error) { handleSupabaseError('importCxPFromExcel:upsert', error); return; }
+      if (error) { handleSupabaseError('importCxPFromExcel:insert', error); return; }
       setCxPState([...cxp.filter(i => i.mes !== month), ...items]);
     } else {
       const existingDescs = new Set(cxp.filter(i => i.mes === month).map(i => i.descripcion));

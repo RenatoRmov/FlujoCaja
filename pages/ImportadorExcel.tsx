@@ -386,30 +386,14 @@ export default function ImportadorExcel() {
     if (!selectedGroup || parsedRows.length === 0) return;
     setCxpImporting(true);
 
-    // Same-month items: safe to reuse their IDs (they'll be deleted in replace mode)
-    const sameMonthByNorm = new Map<string, CuentaPendiente>();
-    for (const item of cxp.filter(i => i.mes === selectedGroup.monthStr)) {
-      const key = normalizeDesc(item.descripcion);
-      if (!sameMonthByNorm.has(key)) sameMonthByNorm.set(key, item);
-    }
-
-    // Any-month items: only for groupId and canonical description, never for ID
+    // Build lookup for groupId and canonical description (any month)
     const anyMonthByNorm = new Map<string, CuentaPendiente>();
     for (const item of cxp) {
       const key = normalizeDesc(item.descripcion);
       if (!anyMonthByNorm.has(key)) anyMonthByNorm.set(key, item);
     }
 
-    const findSameMonthMatch = (desc: string) => {
-      const n = normalizeDesc(desc);
-      if (sameMonthByNorm.has(n)) return sameMonthByNorm.get(n)!;
-      for (const [k, v] of sameMonthByNorm) {
-        if (n.startsWith(k) || k.startsWith(n)) return v;
-      }
-      return null;
-    };
-
-    const findAnyMatch = (desc: string) => {
+    const findAnyMatch = (desc: string): CuentaPendiente | null => {
       const n = normalizeDesc(desc);
       if (anyMonthByNorm.has(n)) return anyMonthByNorm.get(n)!;
       for (const [k, v] of anyMonthByNorm) {
@@ -418,25 +402,12 @@ export default function ImportadorExcel() {
       return null;
     };
 
-    // Track used IDs to prevent duplicates within the same import batch
-    const usedIds = new Set<string>();
-
+    // Always generate a fresh ID — never reuse existing IDs to avoid
+    // INSERT/UPSERT conflicts (the same ID can exist in other months)
     const items: CuentaPendiente[] = parsedRows.map(row => {
-      const sameMonthMatch = findSameMonthMatch(row.descripcion);
       const anyMatch = findAnyMatch(row.descripcion);
-
-      // Only reuse ID from same-month match — reusing cross-month IDs causes
-      // duplicate-key conflicts when upserting because those rows still exist in the DB
-      let itemId: string;
-      if (sameMonthMatch && !usedIds.has(sameMonthMatch.id)) {
-        itemId = sameMonthMatch.id;
-      } else {
-        itemId = genId();
-      }
-      usedIds.add(itemId);
-
       return {
-        id: itemId,
+        id: genId(),
         mes: selectedGroup.monthStr,
         descripcion: anyMatch?.descripcion ?? row.descripcion,
         tipoPago: row.tipoPago,
@@ -445,9 +416,8 @@ export default function ImportadorExcel() {
         saldo: row.saldo,
         vencimiento: row.vencimiento,
         estado: row.estado,
-        observaciones: sameMonthMatch?.observaciones ?? '',
+        observaciones: '',
         ...(anyMatch?.groupId ? { groupId: anyMatch.groupId } : {}),
-        ...(sameMonthMatch?.cuotaActual ? { cuotaActual: sameMonthMatch.cuotaActual, cuotasTotales: sameMonthMatch.cuotasTotales } : {}),
       };
     });
     await importCxPFromExcel(selectedGroup.monthStr, items, cxpConflict);
