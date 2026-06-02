@@ -233,20 +233,22 @@ export const GlobalStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const importCxPFromExcel = async (month: string, items: CuentaPendiente[], mode: 'replace' | 'merge') => {
-    let finalItems: CuentaPendiente[];
     if (mode === 'replace') {
+      // Delete only this month — future installments of credits remain intact
       const { error: delError } = await supabase.from('cxp').delete().eq('mes', month);
       if (delError) { handleSupabaseError('importCxPFromExcel:delete', delError); return; }
-      finalItems = [...cxp.filter(i => i.mes !== month), ...items];
+      // Insert only the incoming items; other months are already correct in the DB
+      const { error } = await supabase.from('cxp').insert(items);
+      if (error) { handleSupabaseError('importCxPFromExcel:upsert', error); return; }
+      setCxPState([...cxp.filter(i => i.mes !== month), ...items]);
     } else {
       const existingDescs = new Set(cxp.filter(i => i.mes === month).map(i => i.descripcion));
       const newItems = items.filter(i => !existingDescs.has(i.descripcion));
       if (newItems.length === 0) return;
-      finalItems = [...cxp, ...newItems];
+      const { error } = await supabase.from('cxp').insert(newItems);
+      if (error) { handleSupabaseError('importCxPFromExcel:merge', error); return; }
+      setCxPState([...cxp, ...newItems]);
     }
-    const { error } = await supabase.from('cxp').upsert(finalItems);
-    if (error) { handleSupabaseError('importCxPFromExcel:upsert', error); return; }
-    setCxPState(finalItems);
   };
 
   const deleteCxP = async (idOrIds: string | string[]) => {

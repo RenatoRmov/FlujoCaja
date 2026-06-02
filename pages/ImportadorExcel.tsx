@@ -385,39 +385,69 @@ export default function ImportadorExcel() {
   const handleCxpImport = async () => {
     if (!selectedGroup || parsedRows.length === 0) return;
     setCxpImporting(true);
-    // Build a match map: normalizedDesc → existing cxp item (any month)
-    const existingByNorm = new Map<string, CuentaPendiente>();
+
+    // Same-month items: safe to reuse their IDs (they'll be deleted in replace mode)
+    const sameMonthByNorm = new Map<string, CuentaPendiente>();
+    for (const item of cxp.filter(i => i.mes === selectedGroup.monthStr)) {
+      const key = normalizeDesc(item.descripcion);
+      if (!sameMonthByNorm.has(key)) sameMonthByNorm.set(key, item);
+    }
+
+    // Any-month items: only for groupId and canonical description, never for ID
+    const anyMonthByNorm = new Map<string, CuentaPendiente>();
     for (const item of cxp) {
       const key = normalizeDesc(item.descripcion);
-      if (!existingByNorm.has(key)) existingByNorm.set(key, item);
+      if (!anyMonthByNorm.has(key)) anyMonthByNorm.set(key, item);
     }
-    const findMatch = (desc: string, venc: string | null) => {
+
+    const findSameMonthMatch = (desc: string) => {
       const n = normalizeDesc(desc);
-      // Exact normalized match
-      if (existingByNorm.has(n)) return existingByNorm.get(n)!;
-      // Prefix match (Excel has "Falabella Michelle (0227)" → webapp has "Falabella Michelle")
-      for (const [k, v] of existingByNorm) {
+      if (sameMonthByNorm.has(n)) return sameMonthByNorm.get(n)!;
+      for (const [k, v] of sameMonthByNorm) {
         if (n.startsWith(k) || k.startsWith(n)) return v;
       }
       return null;
     };
 
+    const findAnyMatch = (desc: string) => {
+      const n = normalizeDesc(desc);
+      if (anyMonthByNorm.has(n)) return anyMonthByNorm.get(n)!;
+      for (const [k, v] of anyMonthByNorm) {
+        if (n.startsWith(k) || k.startsWith(n)) return v;
+      }
+      return null;
+    };
+
+    // Track used IDs to prevent duplicates within the same import batch
+    const usedIds = new Set<string>();
+
     const items: CuentaPendiente[] = parsedRows.map(row => {
-      const match = findMatch(row.descripcion, row.vencimiento);
+      const sameMonthMatch = findSameMonthMatch(row.descripcion);
+      const anyMatch = findAnyMatch(row.descripcion);
+
+      // Only reuse ID from same-month match — reusing cross-month IDs causes
+      // duplicate-key conflicts when upserting because those rows still exist in the DB
+      let itemId: string;
+      if (sameMonthMatch && !usedIds.has(sameMonthMatch.id)) {
+        itemId = sameMonthMatch.id;
+      } else {
+        itemId = genId();
+      }
+      usedIds.add(itemId);
+
       return {
-        // Reuse existing id+groupId when match found, so webapp history is preserved
-        id: match?.id ?? genId(),
+        id: itemId,
         mes: selectedGroup.monthStr,
-        descripcion: match?.descripcion ?? row.descripcion,
+        descripcion: anyMatch?.descripcion ?? row.descripcion,
         tipoPago: row.tipoPago,
         categoria: row.categoria,
         monto: row.monto,
         saldo: row.saldo,
         vencimiento: row.vencimiento,
         estado: row.estado,
-        observaciones: match?.observaciones ?? '',
-        ...(match?.groupId ? { groupId: match.groupId } : {}),
-        ...(match?.cuotaActual ? { cuotaActual: match.cuotaActual, cuotasTotales: match.cuotasTotales } : {}),
+        observaciones: sameMonthMatch?.observaciones ?? '',
+        ...(anyMatch?.groupId ? { groupId: anyMatch.groupId } : {}),
+        ...(sameMonthMatch?.cuotaActual ? { cuotaActual: sameMonthMatch.cuotaActual, cuotasTotales: sameMonthMatch.cuotasTotales } : {}),
       };
     });
     await importCxPFromExcel(selectedGroup.monthStr, items, cxpConflict);
