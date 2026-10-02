@@ -9,6 +9,8 @@ import {
 import { useStore } from '../store';
 import { Cuenta, CuentaPendiente, SaldoDiario, CategoryType, PaymentMethod } from '../types';
 import { id as genId, fmt } from '../utils';
+import { buildCxpItems, findCxpMatch, belongsToMonth, hasSuspiciousDate } from '../importHelpers';
+import ImportadorPrestamos from './ImportadorPrestamos';
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -82,14 +84,6 @@ function isHiddenRow(ws: XLSX.WorkSheet, r: number): boolean {
 }
 
 // ── CxP helpers ───────────────────────────────────────────────────────────────
-
-function normalizeDesc(desc: string): string {
-  return desc
-    .toLowerCase()
-    .replace(/\s*\([^)]+\)/g, '')  // strip "(0227...6125)", "(3/33)", etc.
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 function detectCategoria(desc: string): CategoryType {
   const d = desc.toLowerCase();
@@ -322,7 +316,7 @@ export default function ImportadorExcel() {
   const [actualDone, setActualDone] = useState(false);
   const [actualError, setActualError] = useState('');
 
-  const existingForMonth = selectedGroup ? cxp.filter(i => i.mes === selectedGroup.monthStr) : [];
+  const existingForMonth = selectedGroup ? cxp.filter(i => belongsToMonth(i, selectedGroup.monthStr)) : [];
 
   const getWs = (hints: string[]) => {
     if (!workbook) return null;
@@ -386,50 +380,10 @@ export default function ImportadorExcel() {
     if (!selectedGroup || parsedRows.length === 0) return;
     setCxpImporting(true);
 
-    // Build lookup for groupId and canonical description (any month)
-    const anyMonthByNorm = new Map<string, CuentaPendiente>();
-    for (const item of cxp) {
-      const key = normalizeDesc(item.descripcion);
-      if (!anyMonthByNorm.has(key)) anyMonthByNorm.set(key, item);
-    }
-
-    const findAnyMatch = (desc: string): CuentaPendiente | null => {
-      const n = normalizeDesc(desc);
-      if (anyMonthByNorm.has(n)) return anyMonthByNorm.get(n)!;
-      for (const [k, v] of anyMonthByNorm) {
-        if (n.startsWith(k) || k.startsWith(n)) return v;
-      }
-      return null;
-    };
-
-    // Always generate a fresh ID — never reuse existing IDs to avoid
-    // INSERT/UPSERT conflicts (the same ID can exist in other months)
-    const items: CuentaPendiente[] = parsedRows.map(row => {
-      const anyMatch = findAnyMatch(row.descripcion);
-      return {
-        id: genId(),
-        mes: selectedGroup.monthStr,
-        descripcion: anyMatch?.descripcion ?? row.descripcion,
-        tipoPago: row.tipoPago,
-        categoria: row.categoria,
-        monto: row.monto,
-        saldo: row.saldo,
-        vencimiento: row.vencimiento,
-        estado: row.estado,
-        observaciones: '',
-        ...(anyMatch?.groupId ? { groupId: anyMatch.groupId } : {}),
-      };
-    });
-    // Deduplicate by groupId (or description) — the Excel can have the same credit
-    // on multiple rows; keep only the first occurrence to prevent batch duplicates
-    const seenKeys = new Set<string>();
-    const uniqueItems = items.filter(i => {
-      const key = i.groupId ?? i.descripcion;
-      if (seenKeys.has(key)) return false;
-      seenKeys.add(key);
-      return true;
-    });
-    await importCxPFromExcel(selectedGroup.monthStr, uniqueItems, cxpConflict);
+    // Siempre IDs nuevos (el mismo ID puede existir en otros meses). El enlace a la serie existente se hace por
+    // el código del crédito (p. ej. "(2279)"), así que créditos distintos con nombre parecido ya no se mezclan.
+    const items = buildCxpItems(parsedRows, cxp, selectedGroup.monthStr, genId);
+    await importCxPFromExcel(selectedGroup.monthStr, items, cxpConflict);
     setCxpImporting(false); setCxpDone(true);
   };
 
@@ -557,20 +511,8 @@ export default function ImportadorExcel() {
           {parsedRows.length > 0 && selectedGroup && (
             <div className="space-y-4">
               {(() => {
-                // Build match map for preview
-                const previewMatchMap = new Map<string, CuentaPendiente>();
-                for (const item of cxp) {
-                  const k = normalizeDesc(item.descripcion);
-                  if (!previewMatchMap.has(k)) previewMatchMap.set(k, item);
-                }
-                const getPreviewMatch = (desc: string) => {
-                  const n = normalizeDesc(desc);
-                  if (previewMatchMap.has(n)) return previewMatchMap.get(n)!;
-                  for (const [k, v] of previewMatchMap) {
-                    if (n.startsWith(k) || k.startsWith(n)) return v;
-                  }
-                  return null;
-                };
+                // Mismo criterio de vínculo que usa la importación (créditos por código, series por nombre)
+                const getPreviewMatch = (desc: string) => findCxpMatch(desc, cxp, selectedGroup.monthStr);
                 const matchCount = parsedRows.filter(r => getPreviewMatch(r.descripcion)).length;
                 return (
                   <>
@@ -611,7 +553,12 @@ export default function ImportadorExcel() {
                                 </td>
                                 <td className="px-3 py-2 text-slate-500 text-[10px]">{row.categoria}</td>
                                 <td className="px-3 py-2 text-right font-mono text-slate-700">{fmt(row.monto)}</td>
-                                <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{row.vencimiento ?? '—'}</td>
+                                <td className="px-3 py-2 text-slate-500 whitespace-nowrap">
+                                  {row.vencimiento ?? '—'}
+                                  {hasSuspiciousDate(row, selectedGroup.monthStr) && (
+                                    <span className="ml-1.5 px-1.5 py-0.5 rounded font-bold text-[9px] bg-amber-100 text-amber-700" title="El Excel trae una fecha lejos de este mes; se corregirá al importar">⚠ fecha</span>
+                                  )}
+                                </td>
                                 <td className="px-3 py-2 text-right font-mono font-bold text-slate-800">{fmt(row.saldo)}</td>
                                 <td className="px-3 py-2">
                                   <span className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${row.estado === 'PAGADA' ? 'bg-emerald-100 text-emerald-700' : row.estado === 'PARCIAL' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>{row.estado}</span>
@@ -635,7 +582,7 @@ export default function ImportadorExcel() {
                         <input type="radio" name="cxp-conflict" value={mode} checked={cxpConflict === mode} onChange={() => setCxpConflict(mode)} className="mt-0.5" />
                         <div>
                           <p className="font-bold text-sm text-slate-800">{mode === 'replace' ? 'Reemplazar todo' : 'Combinar (agregar nuevos)'}</p>
-                          <p className="text-xs text-slate-500 mt-0.5">{mode === 'replace' ? `Elimina los ${existingForMonth.length} registros actuales e importa los ${parsedRows.length} del Excel.` : 'Importa solo los registros nuevos (por descripción). Los existentes no se modifican.'}</p>
+                          <p className="text-xs text-slate-500 mt-0.5">{mode === 'replace' ? `Elimina los ${existingForMonth.length} registros del mes (incluidas cuotas de series que vencen en el mes) e importa los ${parsedRows.length} del Excel.` : 'Importa solo los registros nuevos (por descripción y por código de crédito). Los existentes no se modifican.'}</p>
                         </div>
                       </label>
                     ))}
@@ -798,17 +745,7 @@ export default function ImportadorExcel() {
       )}
 
       {/* ── Prestamos tab ────────────────────────────────────────────────────── */}
-      {workbook && activeTab === 'prestamos' && (
-        <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
-          <div className="w-14 h-14 bg-slate-100 rounded-2xl flex items-center justify-center">
-            <Clock className="w-7 h-7 text-slate-400" />
-          </div>
-          <div>
-            <p className="font-bold text-slate-700 text-lg">Próximamente</p>
-            <p className="text-sm text-slate-400 mt-1 max-w-xs">Importación de cuotas de préstamos desde la pestaña Préstamos.</p>
-          </div>
-        </div>
-      )}
+      {workbook && activeTab === 'prestamos' && <ImportadorPrestamos workbook={workbook} />}
     </div>
   );
 }

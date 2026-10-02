@@ -6,7 +6,14 @@ import {
 } from './types';
 import { id, ymd } from './utils';
 import { supabase } from './supabase';
+import { belongsToMonth, loanCode } from './importHelpers';
 import dayjs from 'dayjs';
+
+const chunk = <T,>(arr: T[], size: number): T[][] => {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+};
 
 interface GlobalStore {
   cuentas: Cuenta[];
@@ -37,6 +44,7 @@ interface GlobalStore {
 
   importCxPFromExcel: (month: string, items: CuentaPendiente[], mode: 'replace' | 'merge') => Promise<void>;
   importSaldosFromExcel: (items: SaldoDiario[], mode: 'replace' | 'merge') => Promise<void>;
+  importPrestamosFromExcel: (plan: { insert: CuentaPendiente[]; deleteIds: string[] }) => Promise<boolean>;
 
   // Funciones de eliminación física
   deleteCxP: (idOrIds: string | string[]) => Promise<void>;
@@ -234,27 +242,34 @@ export const GlobalStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const importCxPFromExcel = async (month: string, items: CuentaPendiente[], mode: 'replace' | 'merge') => {
     if (mode === 'replace') {
-      // Delete only this month — future installments of credits remain intact
-      const { error: delError } = await supabase.from('cxp').delete().eq('mes', month);
-      if (delError) { handleSupabaseError('importCxPFromExcel:delete', delError); return; }
-      // Insert only the incoming items; other months are already correct in the DB
+      // El mes incluye lo que tiene `mes` = mes importado y lo que vence dentro del mes (cuotas de series creadas antes)
+      const oldIds: string[] = cxp.filter(i => belongsToMonth(i, month)).map(i => i.id);
+      // Primero se insertan las nuevas y recién después se borran las anteriores: si algo falla no se pierde información
       const { error } = await supabase.from('cxp').insert(items);
       if (error) { handleSupabaseError('importCxPFromExcel:insert', error); return; }
-      setCxPState([...cxp.filter(i => i.mes !== month), ...items]);
+      const deleted: string[] = [];
+      for (const ids of chunk(oldIds, 100)) {
+        const { error: delError } = await supabase.from('cxp').delete().in('id', ids);
+        if (delError) {
+          setCxPState([...cxp.filter(i => !deleted.includes(i.id)), ...items]);
+          handleSupabaseError('importCxPFromExcel:delete', delError);
+          return;
+        }
+        deleted.push(...ids);
+      }
+      setCxPState([...cxp.filter(i => !deleted.includes(i.id)), ...items]);
     } else {
-      const existingInMonth = cxp.filter(i => i.mes === month);
+      const existingInMonth = cxp.filter(i => belongsToMonth(i, month));
       const existingDescs = new Set(existingInMonth.map(i => i.descripcion));
-      // If a groupId already has a member in this month, don't add another one
+      // Si una serie o un crédito (por su código) ya tiene su cuota en el mes, no se agrega otra
       const existingGroupIds = new Set(existingInMonth.filter(i => i.groupId).map(i => i.groupId!));
+      const existingCodes = new Set(existingInMonth.map(i => loanCode(i.descripcion)).filter((c): c is string => !!c));
 
-      // Deduplicate within incoming batch too (same groupId or same description = same credit)
-      const seenKeys = new Set<string>();
       const newItems = items.filter(i => {
-        const key = i.groupId ?? i.descripcion;
-        if (seenKeys.has(key)) return false;
-        seenKeys.add(key);
         if (existingDescs.has(i.descripcion)) return false;
         if (i.groupId && existingGroupIds.has(i.groupId)) return false;
+        const code = loanCode(i.descripcion);
+        if (code && existingCodes.has(code)) return false;
         return true;
       });
       if (newItems.length === 0) return;
@@ -262,6 +277,27 @@ export const GlobalStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (error) { handleSupabaseError('importCxPFromExcel:merge', error); return; }
       setCxPState([...cxp, ...newItems]);
     }
+  };
+
+  const importPrestamosFromExcel = async (plan: { insert: CuentaPendiente[]; deleteIds: string[] }): Promise<boolean> => {
+    const inserted: CuentaPendiente[] = [];
+    const deleted: string[] = [];
+    let ok = true;
+    // Primero se insertan las cuotas nuevas y después se borran las reemplazadas
+    for (const part of chunk(plan.insert, 200)) {
+      const { error } = await supabase.from('cxp').insert(part);
+      if (error) { handleSupabaseError('importPrestamosFromExcel:insert', error); ok = false; break; }
+      inserted.push(...part);
+    }
+    if (ok) {
+      for (const ids of chunk(plan.deleteIds, 100)) {
+        const { error } = await supabase.from('cxp').delete().in('id', ids);
+        if (error) { handleSupabaseError('importPrestamosFromExcel:delete', error); ok = false; break; }
+        deleted.push(...ids);
+      }
+    }
+    setCxPState(prev => [...prev.filter(i => !deleted.includes(i.id)), ...inserted]);
+    return ok;
   };
 
   const deleteCxP = async (idOrIds: string | string[]) => {
@@ -354,7 +390,7 @@ export const GlobalStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
       cuentas, saldos, movimientos, cxp, cxc, ingresos, parametros, ui, suggested,
       setCuentas, setSaldos, setMovimientos, setCxP, setCxC, setIngresos, setParametros, setUI, saveSuggestion,
       loadDemoData, deleteSaldosByDate, clearMonthSaldos, importMovimientos, clearMonthMovimientos,
-      importCxPFromExcel, importSaldosFromExcel,
+      importCxPFromExcel, importSaldosFromExcel, importPrestamosFromExcel,
       deleteCxP, deleteCxC, deleteIngreso, deleteMovimiento, deleteCuenta
     }}>
       {children}
